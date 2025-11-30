@@ -166,42 +166,27 @@ config = {
 
 ```
 CTD-ViT/
-├── README.md                          # This file
-├── requirements.txt                   # Python dependencies
-├── config.py                          # Configuration parameters
-├── models/
-│   ├── __init__.py
-│   ├── patch_embed.py                # Convolutional patch embedding
-│   ├── attention.py                  # Multi-head attention with optional saliency
-│   ├── mlp.py                        # MLP feedforward block
-│   ├── transformer_block.py          # Transformer block with CTD
-│   └── vit.py                        # Full ViT model
-├── data/
-│   ├── __init__.py
-│   └── cifar100_loader.py            # CIFAR-100 data loading & augmentation
-├── training/
-│   ├── __init__.py
-│   ├── train.py                      # Main training script
-│   ├── utils.py                      # Training utilities (logging, checkpoints)
-│   └── metrics.py                    # Evaluation metrics (accuracy, F1, etc.)
-├── experiments/
-│   ├── baseline.py                   # Train baseline model (no CTD)
-│   ├── ctd_train.py                  # Train with CTD (γ=1.5)
-│   └── ablations/
-│       ├── gamma_sensitivity.py      # Ablate γ ∈ {0.5, 1.0, 1.5, 2.0, 3.0}
-│       ├── saliency_metrics.py       # Compare saliency metrics
-│       └── schedule_design.py        # Compare schedule shapes
-├── notebooks/
-│   ├── results_analysis.ipynb        # Visualize results & curves
-│   ├── attention_visualization.ipynb # Visualize attention maps
-│   └── saliency_analysis.ipynb       # Analyze token saliency patterns
-├── checkpoints/
-│   ├── baseline_final.pth            # Baseline model weights
-│   └── ctd_gamma1.5_final.pth        # CTD model weights
-└── results/
-    ├── accuracy_curves.png           # Training/val accuracy over epochs
-    ├── loss_curves.png               # Training/val loss over epochs
-    └── results.csv                   # Quantitative results table
+├── README.md                    # This file
+├── LICENSE
+├── .gitignore                   # Excludes checkpoints
+│
+├── Baseline_ViT_Experiment/
+│   ├── ViT_Base_Benchmarking.ipynb      # Baseline training notebook
+│   ├── baseline_accuracy_curve.png      # Accuracy over epochs
+│   ├── baseline_loss_curve.png          # Loss over epochs
+│   ├── baseline_lr_curve.png            # Learning rate schedule
+│   ├── baseline_history.pkl             # Training history
+│   └── baseline_metrics.csv             # Final metrics
+│
+├── CTD_ViT_Experiment/
+│   ├── CTD_ViT_CIFAR100.ipynb           # CTD training notebook
+│   ├── CTD_ViT_accuracy_curve.png       # Accuracy over epochs
+│   ├── CTD_ViT_loss_curve.png           # Loss over epochs
+│   ├── CTD_ViT_lr_curve.png             # Learning rate schedule
+│   ├── CTD_ViT_history.pkl              # Training history
+│   └── CTD_ViT_metrics.csv              # Final metrics
+│
+└── .gitattributes               # Git configuration
 ```
 
 ---
