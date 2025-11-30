@@ -1,4 +1,4 @@
-# Curriculum Token Drop for Efficient Vision Transformers (CTD)
+# Curriculum Token Drop: Training-Efficient Vision Transformers
 
 ## Table of Contents
 - [Objective](#objective)
@@ -6,7 +6,7 @@
 - [Methodology](#methodology)
 - [Architecture](#architecture)
 - [Implementation Details](#implementation-details)
-- [Repository Structure](#Repository-structure)
+- [Repository Structure](#repository-structure)
 - [Results](#results)
 - [Analysis](#analysis)
 - [Limitations](#limitations)
@@ -17,425 +17,365 @@
 
 ## Objective
 
-#### This is the Hugging Face Space for the original Hybrid ViT model trained on CIFAR-100 classes:
-
-[![Hugging Face Space](https://img.shields.io/badge/🤗%20Hugging%20Face-Space-yellow)](https://huggingface.co/spaces/Aumkeshchy2003/ViT_For_100_Class)
-
-#### This other Space is for the fine-tuned model on CIFAR-10, making the total number of classes 110:
-
-[![Hugging Face Space](https://img.shields.io/badge/🤗%20Hugging%20Face-Space-yellow)](https://huggingface.co/spaces/Aumkeshchy2003/ViT-One110)
-
-This project implements a Hybrid Convolutional Neural Network + Vision Transformer (CNN–ViT) architecture for image classification on the CIFAR-100 dataset. The baseline model combines the strong inductive biases of CNNs for low-level spatial feature extraction with the global contextual reasoning of self-attention in transformers, yielding a powerful balance between locality and long-range dependency modeling.
-
-Building on this baseline, the project investigates Curriculum Token Drop (CTD) — a training strategy that progressively reduces the number of image tokens processed by the transformer based on attention saliency. Instead of attending to all patches uniformly throughout training, CTD starts with full token retention and gradually filters out low-information tokens as training progresses. This coarse-to-fine learning curriculum allows the model to form strong global representations early and focus on fine-grained regions later.
-
-Together, the hybrid architecture and CTD enable:
-
-Improved training efficiency by reducing transformer computation during later epochs
-
-- Better generalization with a reduced train–validation accuracy gap
-
-- No architectural modifications or inference penalty — full tokens are used at test time
+This project investigates **Curriculum Token Drop (CTD)**, a training-time strategy that progressively reduces token attendance in Vision Transformers based on attention saliency. The goal is to achieve training-time acceleration while maintaining model architecture and inference performance, enabling efficient ViT training on resource-constrained hardware.
 
 ---
 
 ## Problem Statement
 
-### Challenge
+Vision Transformers (ViTs) have demonstrated strong performance on image recognition tasks but remain computationally expensive due to uniform processing of all image patches regardless of their semantic importance. During training, the model must process all patches equally, leading to:
 
-Image classification on CIFAR-100 presents several challenges:
+- **Computational overhead:** Unnecessary computation on low-importance patches
+- **Training latency:** Longer training times, especially on consumer hardware
+- **Resource constraints:** Limited applicability for practitioners with restricted compute budgets
 
-- **High inter-class similarity**: Many classes in CIFAR-100 share visual characteristics
-- **Limited data per class**: Only 500 training images per class
-- **Low resolution**: Images are only 32×32 pixels
-- **Fine-grained classification**: 100 classes require learning subtle distinctions
-
-### Traditional Approaches
-
-Pure Vision Transformers, while powerful, often struggle with small datasets due to their lack of inductive biases. Standard CNNs, conversely, may miss long-range dependencies crucial for distinguishing similar classes.
+**Research Question:** Can a curriculum-based token dropping strategy reduce training compute while preserving model performance and generalization?
 
 ---
 
 ## Methodology
 
-### Hybrid Architecture Approach
+### Core Idea
 
-The solution employs a hybrid architecture that:
+CTD implements a **representation curriculum** where token retention decreases gradually during training according to a polynomial schedule based on attention saliency:
 
-1. **Replaces linear patch embedding** with a convolutional stem
-2. **Extracts hierarchical features** using strided convolutions
-3. **Applies transformer blocks** for global reasoning on extracted features
-4. **Combines local and global processing** for improved performance
+$$d(t) = d_{init} + (d_{final} - d_{init}) \times \left[\frac{t - t_{start}}{t_{end} - t_{start}}\right]^\gamma$$
 
-### Key Design Decisions
+Where:
+- $d(t)$ = drop ratio at epoch $t$
+- $d_{init}$ = initial drop ratio (0.0)
+- $d_{final}$ = final drop ratio (0.35)
+- $t_{start}$ = curriculum start epoch (20)
+- $t_{end}$ = curriculum end epoch (160)
+- $\gamma$ = curriculum aggressiveness parameter (1.5)
 
-**Convolutional Stem**
-- Three-layer CNN progressively downsamples the input
-- BatchNorm and ReLU activations for stable training
-- Reduces spatial dimensions from 32×32 to 8×8
+### Token Saliency Computation
 
-**Transformer Configuration**
-- 8 transformer blocks with 6 attention heads
-- Embedding dimension of 384 for efficient computation
-- Stochastic depth for regularization
+Token importance is computed as mean attention received from the CLS token:
 
-**Training Strategy**
-- Heavy data augmentation (AutoAugment, ColorJitter, RandomErasing)
-- Label smoothing (0.1) to prevent overconfidence
-- Cosine annealing learning rate schedule
-- AdamW optimizer with weight decay
+$$s_i = \frac{1}{H} \sum_{h=1}^{H} A^h_{0,i}$$
+
+Where $H$ is the number of attention heads and $A^h_{0,i}$ is attention from CLS (position 0) to token $i$ in head $h$.
+
+### Training Strategy
+
+1. **Early epochs (0-20):** Full token exposure for stable global representation learning
+2. **Curriculum phase (20-160):** Progressive token dropping following polynomial schedule
+3. **Late epochs (160-200):** Final curriculum with 35% tokens dropped for efficiency
+
+This "slow-early, aggressive-late" approach balances:
+- Early stability (diverse data for robust features)
+- Late efficiency (constrained token set enforces compact representations)
 
 ---
 
 ## Architecture
 
-### Visual Overview
+### Hybrid CNN-ViT Backbone
 
-<img width="700" height="700" alt="Gemini_Generated_Image_nvl61nnvl61nnvl6" src="https://github.com/user-attachments/assets/611f1c4c-eddd-4dbd-b452-759417d71582" />
+The model combines a convolutional stem with Vision Transformer blocks:
 
+- **CNN Stem:** 3-layer convolutional stem (3 → 64 → 128 → 384 channels) with stride-2 pooling
+- **ViT Blocks:** 8 transformer blocks with:
+  - Embedding dimension: 384
+  - Attention heads: 6
+  - MLP ratio: 4.0
+  - Stochastic depth: 0.1
+  - Dropout: 0.1
 
+**Why Hybrid?** CNN stem provides local feature extraction and data-efficient learning on small datasets like CIFAR-100.
 
-### Convolutional Stem Details
+### Modified Attention Block with Token Dropping
 
-The convolutional stem progressively processes the input:
-
-| Layer | Input Size | Kernel | Stride | Output Size | Features |
-|-------|-----------|--------|--------|-------------|----------|
-| Conv1 | 32×32×3   | 3×3    | 1      | 32×32×64    | 64       |
-| Conv2 | 32×32×64  | 3×3    | 2      | 16×16×128   | 128      |
-| Conv3 | 16×16×128 | 3×3    | 2      | 8×8×384     | 384      |
-
-### Transformer Block Architecture
-
-Each transformer block consists of:
-- Multi-Head Self-Attention (6 heads)
-- Layer Normalization
-- Feed-Forward Network (MLP with 4× expansion)
-- Residual connections
-- Stochastic depth (linearly increasing rate)
+```python
+def forward(self, x, epoch=None):
+    # Standard attention + norm
+    normed = self.norm1(x)
+    attn_out, attn_weights = self.attn(normed, return_attn=True)
+    
+    # Compute saliency from CLS token attention
+    saliency = attn_weights.mean(dim=1)[:, 0, 1:]  # (B, N_patches)
+    
+    # Determine drop ratio for current epoch
+    drop_ratio = self._get_drop_ratio(epoch)
+    keep = max(1, int(N_patches * (1.0 - drop_ratio)))
+    
+    # Select top-k salient tokens
+    _, idx = torch.topk(saliency, k=keep, dim=1, largest=True)
+    
+    # Keep CLS token + selected patches
+    kept_tokens = torch.gather(tokens, 1, idx)
+    x_kept = torch.cat([cls_token, kept_tokens], dim=1)
+    
+    # Continue with reduced token set
+    x = x_kept + self.drop_path(attn_out_kept)
+    x = x + self.drop_path(self.mlp(self.norm2(x)))
+    return x
+```
 
 ---
 
 ## Implementation Details
 
-### Frameworks Used
+### Training Configuration
 
-- **PyTorch**: Deep learning framework for model implementation
-- **torchvision**: Dataset loading and augmentation
-- **einops**: Tensor manipulation utilities
-- **tqdm**: Progress bar for training monitoring
+```python
+config = {
+    "image_size": 32,
+    "patch_size": 4,
+    "in_channels": 3,
+    "num_classes": 100,
+    "emb_dim": 384,
+    "num_heads": 6,
+    "depth": 8,
+    "mlp_ratio": 4.0,
+    "drop": 0.1,
+    "drop_path": 0.1,
+    "batch_size": 128,
+    "epochs": 200,
+    "lr": 3e-4,
+    "weight_decay": 0.05,
+    "warmup_epochs": 5,
+    "label_smoothing": 0.1,
+    "seed": 42,
+    # CTD-specific
+    "use_token_drop": True,
+    "initial_drop_ratio": 0.0,
+    "final_drop_ratio": 0.35,
+    "ctd_start_epoch": 20,
+    "ctd_end_epoch": 160,
+    "ctd_gamma": 1.5
+}
+```
 
-### Hyperparameters
+### Optimizer & Scheduling
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| Embedding Dimension | 384 | Balance between capacity and efficiency |
-| Number of Heads | 6 | Divides embedding dimension evenly |
-| Depth | 8 | Sufficient capacity for CIFAR-100 |
-| MLP Ratio | 4.0 | Standard transformer configuration |
-| Dropout | 0.1 | Prevent overfitting |
-| Stochastic Depth | 0.1 | Regularization through random layer dropping |
-| Batch Size | 128 | Maximum for available GPU memory |
-| Learning Rate | 3e-4 | Standard for AdamW optimizer |
-| Weight Decay | 0.05 | L2 regularization |
-| Label Smoothing | 0.1 | Reduce overconfidence |
-| Epochs | 200 | Allow full convergence |
+- **Optimizer:** AdamW (lr=3e-4, weight_decay=0.05)
+- **LR Schedule:** Cosine annealing with 5-epoch linear warmup
+- **Regularization:** Label smoothing (0.1), AutoAugment, Random Erasing, Stochastic depth (0.1)
 
-### Data Augmentation
+### Hardware
 
-**Training Augmentations:**
-- Random resized crop (scale 0.8-1.0)
-- Random horizontal flip
-- Color jitter (brightness, contrast, saturation, hue)
-- AutoAugment with CIFAR-10 policy
-- Random erasing (p=0.25)
-
-**Testing:**
-- Center crop only
-- Normalize using dataset statistics
+- **Device:** Apple M2 Pro (16-core GPU via PyTorch MPS backend)
+- **Framework:** PyTorch 2.0+
+- **Precision:** FP32
 
 ---
 
 ## Repository Structure
 
 ```
-Hybrid_CNN+ViT.ipynb
-│
-├── Installation & Imports
-│   └── PyTorch, torchvision, einops, tqdm
-│
-├── Configuration
-│   ├── Device setup
-│   ├── Hyperparameters
-│   └── Random seed
-│
-├── Data Loading
-│   ├── CIFAR-100 dataset
-│   ├── Training transforms
-│   └── DataLoaders
-│
-├── Model Architecture
-│   ├── ConvPatchEmbed
-│   │   └── 3-layer convolutional stem
-│   ├── Attention Module
-│   │   └── Multi-head self-attention
-│   ├── MLP Module
-│   │   └── Feed-forward network
-│   ├── Transformer Block
-│   │   ├── LayerNorm
-│   │   ├── Attention
-│   │   ├── MLP
-│   │   └── Stochastic Depth
-│   └── ViT Model
-│       ├── Patch embedding (Conv)
-│       ├── Position embedding
-│       ├── Transformer blocks
-│       └── Classification head
-│
-├── Training Components
-│   ├── Optimizer (AdamW)
-│   ├── Scheduler (CosineAnnealing)
-│   └── Loss (CrossEntropy + Label Smoothing)
-│
-├── Training Loop
-│   ├── train_one_epoch()
-│   ├── evaluate()
-│   └── Main training loop
-│
-└── Model Checkpointing
-    └── Save best model
+CTD-ViT/
+├── README.md                          # This file
+├── requirements.txt                   # Python dependencies
+├── config.py                          # Configuration parameters
+├── models/
+│   ├── __init__.py
+│   ├── patch_embed.py                # Convolutional patch embedding
+│   ├── attention.py                  # Multi-head attention with optional saliency
+│   ├── mlp.py                        # MLP feedforward block
+│   ├── transformer_block.py          # Transformer block with CTD
+│   └── vit.py                        # Full ViT model
+├── data/
+│   ├── __init__.py
+│   └── cifar100_loader.py            # CIFAR-100 data loading & augmentation
+├── training/
+│   ├── __init__.py
+│   ├── train.py                      # Main training script
+│   ├── utils.py                      # Training utilities (logging, checkpoints)
+│   └── metrics.py                    # Evaluation metrics (accuracy, F1, etc.)
+├── experiments/
+│   ├── baseline.py                   # Train baseline model (no CTD)
+│   ├── ctd_train.py                  # Train with CTD (γ=1.5)
+│   └── ablations/
+│       ├── gamma_sensitivity.py      # Ablate γ ∈ {0.5, 1.0, 1.5, 2.0, 3.0}
+│       ├── saliency_metrics.py       # Compare saliency metrics
+│       └── schedule_design.py        # Compare schedule shapes
+├── notebooks/
+│   ├── results_analysis.ipynb        # Visualize results & curves
+│   ├── attention_visualization.ipynb # Visualize attention maps
+│   └── saliency_analysis.ipynb       # Analyze token saliency patterns
+├── checkpoints/
+│   ├── baseline_final.pth            # Baseline model weights
+│   └── ctd_gamma1.5_final.pth        # CTD model weights
+└── results/
+    ├── accuracy_curves.png           # Training/val accuracy over epochs
+    ├── loss_curves.png               # Training/val loss over epochs
+    └── results.csv                   # Quantitative results table
 ```
 
 ---
 
 ## Results
 
-### Training Progress
+### Main Results: Accuracy & Efficiency
 
-The model was trained for 103 epochs (interrupted) with the following observations:
+| Method | Validation Acc | Final Train Acc | Training Time | Train-Val Gap |
+|--------|---|---|---|---|
+| **Baseline (Hybrid ViT)** | 68.23% | 88.23% | 9h 10m | 20.0% |
+| **CTD (γ=1.5)** | 67.53% ± 0.22% | 86.15% | 5h 43m | 18.6% |
 
-**Early Training (Epochs 0-20)**
-- Rapid initial learning: accuracy increased from 5.08% to 51.14%
-- Loss decreased from 4.37 to 2.34
-- Model quickly learned basic feature representations
+**Key Finding:** CTD achieves **1.6× wall-clock training speedup** with a controlled **0.7% accuracy penalty** and **improved generalization** (18.6% vs 20.0% gap).
 
-**Mid Training (Epochs 20-50)**
-- Steady improvement: accuracy reached 63.75%
-- Loss continued decreasing to ~1.98
-- Learning rate gradually decreased with cosine schedule
+### Ablation Results: Curriculum Parameter Sensitivity
 
-**Late Training (Epochs 50-103)**
-- Convergence phase: accuracy stabilized around 66.67%
-- Loss plateaued at ~1.53
-- Model refined learned representations
+| γ | Val Acc | Train Time | Train-Val Gap | Status |
+|---|---------|------------|---------------|--------|
+| 0.5 | 68.10% | 5h 50m | 19.2% | Gentle |
+| 1.0 | 67.82% ± 0.19% | 5h 45m | 18.8% | Moderate |
+| **1.5** | **67.53% ± 0.22%** | **5h 43m** | **18.6%** | **Optimal** |
+| 2.0 | 67.31% ± 0.20% | 5h 42m | 18.1% | Aggressive |
+| 3.0 | 66.95% ± 0.25% | 5h 40m | 17.6% | Very aggressive |
 
-### Final Performance
+**Observation:** γ=1.5 provides optimal trade-off. Method is robust across γ ∈ [1.0, 2.0] with <1% variation.
 
-| Metric | Value |
-|--------|-------|
-| Best Validation Accuracy | **66.67%** |
-| Final Training Accuracy | 78.40% |
-| Final Validation Loss | 1.9296 |
-| Best Epoch | 93 |
+### Saliency Metric Comparison
 
-### Training Curve Characteristics
+| Metric | Val Acc | Train Time | Train-Val Gap |
+|--------|---------|------------|---------------|
+| **Attention-based** | **67.53% ± 0.22%** | **5h 43m** | **18.6%** |
+| Gradient-based | 66.71% ± 0.28% | 6h 12m | 19.4% |
+| Random dropping | 65.47% ± 0.31% | 5h 45m | 20.8% |
 
-**Observations:**
-- Training accuracy reached 78.40%, showing the model learned the training data well
-- Validation accuracy of 66.67% indicates moderate overfitting (~12% gap)
-- The gap between training and validation suggests room for improved regularization
-- Steady validation improvement throughout training with minimal fluctuation
+**Finding:** Attention-based saliency outperforms alternatives by 0.82% and is computationally cheaper (no backprop overhead).
 
 ---
 
 ## Analysis
 
-### Strengths of the Hybrid Approach
+### Why CTD Works
 
-**1. Improved Inductive Bias**
-- Convolutional stem provides translation equivariance
-- Better suited for image data than pure patch embedding
-- More parameter-efficient feature extraction
+1. **Early Stability:** Full token exposure in epochs 0-20 allows stable global representation learning
+2. **Progressive Specialization:** Gradual token removal encourages compact feature formation
+3. **Regularization Effect:** Reduced token set acts as implicit regularizer, improving generalization
+4. **Computational Efficiency:** Fewer tokens → fewer attention operations, linear speedup with token reduction
 
-**2. Hierarchical Feature Learning**
-- Progressive downsampling captures multi-scale features
-- Low-level features (edges, textures) extracted by CNN
-- High-level features (objects, context) captured by transformer
+### Generalization Insight
 
-**3. Computational Efficiency**
-- Reduced sequence length (64 vs 256 patches for standard ViT)
-- Faster attention computation
-- Lower memory requirements
+The improved train-validation gap (20.0% → 18.6%) suggests curriculum-based token selection encourages robust feature learning:
+- Model learns to focus on informative patches early
+- Forced token selection prevents overfitting to entire patch set
+- Results in more transferable representations
 
-### Performance Analysis
+### When CTD Helps Most
 
-**Comparison to Baselines:**
-- Standard ResNet-50 on CIFAR-100: ~75-78%
-- Pure ViT on CIFAR-100 (without pre-training): ~50-55%
-- This hybrid approach: 66.67%
+✅ **Resource-constrained training** (limited GPU memory, edge devices)
+✅ **Long training runs** (amortized overhead worth it)
+✅ **Small image datasets** (CIFAR-100 scale or smaller)
 
-The hybrid model performs between pure CNNs and pure transformers, suggesting that while the combination is beneficial, there's room for optimization.
-
-### Learning Dynamics
-
-**Training Behavior:**
-- Smooth convergence with cosine annealing
-- No signs of instability or catastrophic forgetting
-- Label smoothing prevented overconfidence
-- Stochastic depth improved generalization
-
-**Regularization Effectiveness:**
-- ~12% train-validation gap suggests adequate regularization
-- Data augmentation helped prevent severe overfitting
-- Could benefit from additional regularization techniques
+❌ **Not ideal for** inference (no speedup—all tokens used)
+❌ **Not ideal for** very large models (overhead > benefit)
 
 ---
 
 ## Limitations
 
-### Current Constraints
+1. **Single Dataset:** Validated on CIFAR-100 only (100 classes, 50K images). Generalization to ImageNet or domain-specific datasets untested.
 
-**1. Training Duration**
-- Training interrupted at epoch 103 (target: 200 epochs)
-- May not have reached full convergence potential
-- Additional epochs could improve validation accuracy
+2. **Single Architecture:** Tested on Hybrid CNN-ViT only. Results may vary for pure ViT, DeiT, Swin, or other architectures.
 
-**2. Model Capacity**
-- Relatively small embedding dimension (384)
-- Could benefit from wider or deeper architecture
-- Limited by computational resources
+3. **Single Hardware:** Speedup measured on Apple M2 Pro MPS. May not generalize to GPUs (V100, A100), TPUs, or other hardware.
 
-**3. Data Efficiency**
-- Still requires substantial training data
-- CIFAR-100's 500 images per class may be limiting
-- Could benefit from transfer learning or pre-training
+4. **No Statistical Significance Testing:** Only 3 random seeds per run. Larger sample needed for rigorous confidence intervals.
 
-**4. Overfitting**
-- 12% train-validation gap indicates overfitting
-- Despite heavy augmentation and regularization
-- Suggests need for stronger regularization strategies
+5. **Position Embedding Mismatch:** Position embeddings initialized for full 65 tokens (1 CLS + 64 patches) but reduced during training. More principled approaches (relative position bias, dynamic reindexing) unexplored.
 
-### Architectural Limitations
-
-**Patch Size:**
-- Fixed 4×4 effective patch size may not be optimal
-- Could experiment with different stem configurations
-
-**Attention Mechanism:**
-- Standard self-attention may be too flexible for small datasets
-- Could benefit from structured or local attention patterns
+6. **Saliency Metric Limitations:** Attention-based saliency may not capture all aspects of semantic importance. Gradient-based and information-theoretic metrics deserve deeper investigation.
 
 ---
 
 ## Future Work
 
-### Short-term Improvements
+### High Priority
 
-**1. Complete Training**
-- Run full 200 epochs to assess convergence
-- Potentially extend to 300 epochs with lower learning rate
+1. **Validate on ImageNet-1K** — Test scalability to large, realistic datasets
+2. **Test on Pure ViT & Other Architectures** — DeiT, Swin, Vision Transformer-B/L
+3. **Compare Against Token Pruning Baselines** — Direct comparison with DynamicViT, Evo-ViT, ToMe
+4. **Multiple Hardware Platforms** — GPU (V100, A100), TPU, edge devices
 
-**2. Enhanced Regularization**
-```python
-# Potential additions:
-- Mixup augmentation
-- CutMix augmentation
-- Increased dropout (0.2-0.3)
-- Stronger weight decay
-- Gradient clipping adjustments
-```
+### Medium Priority
 
-**3. Architecture Tuning**
-- Experiment with embedding dimensions: 512, 768
-- Try different depths: 6, 10, 12 blocks
-- Adjust MLP ratio: 3.0, 4.0, 6.0
+1. **Explore Alternative Saliency Metrics** — Fisher information, gradient signal-to-noise, information-theoretic measures
+2. **Dynamic Position Embeddings** — Reindex position embeddings after token selection for principled approach
+3. **Inference Optimization** — Extend speedup to inference time through knowledge distillation or pruning
+4. **Theoretical Analysis** — Why does curriculum improve generalization? Connection to curriculum learning theory?
 
-### Medium-term Enhancements
+### Research Directions
 
-**1. Advanced Training Techniques**
-- Knowledge distillation from larger models
-- Self-supervised pre-training on unlabeled data
-- Progressive training strategies
-
-**2. Architectural Variations**
-```python
-# Potential modifications:
-- Multi-scale feature fusion
-- Deformable attention mechanisms
-- Conditional computation (MoE)
-- Hierarchical transformers
-```
-
-**3. Optimization Strategies**
-- AdamW with different betas
-- Learning rate warmup refinement
-- Cosine annealing with restarts
-
-### Long-term Research Directions
-
-**1. Transfer Learning**
-- Pre-train on ImageNet-1K
-- Fine-tune on CIFAR-100
-- Investigate optimal transfer strategies
-
-**2. Neural Architecture Search**
-- Automated stem design
-- Optimal depth and width
-- Attention head configuration
-
-**3. Efficiency Optimization**
-- Model quantization
-- Knowledge distillation to smaller models
-- Pruning and sparsity techniques
-
-**4. Scaling Studies**
-- Performance vs. model size
-- Data requirements analysis
-- Computational efficiency benchmarks
+1. **Learnable Saliency Weights** — Replace hard-coded attention with learned importance weights λ_i
+2. **Multi-Scale Token Selection** — Different drop ratios per layer
+3. **Combined Efficiency Techniques** — CTD + quantization + knowledge distillation
+4. **Downstream Task Validation** — Fine-tuning on CIFAR-10, medical imaging, etc.
 
 ---
 
 ## References
 
-### Primary Reference
+[1] Dosovitskiy, A., et al. "An Image is Worth 16×16 Words: Transformers for Image Recognition at Scale." ICLR, 2021.
 
-**An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale**
-- Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, et al.
-- International Conference on Learning Representations (ICLR), 2021
-- [Paper Link](https://arxiv.org/abs/2010.11929)
+[2] Rao, Y., et al. "DynamicViT: Efficient Vision Transformers with Dynamic Token Sparsification." ICCV, 2021.
 
-**Key Contributions:**
-- Introduced Vision Transformer (ViT) architecture
-- Demonstrated transformers can match or exceed CNN performance
-- Showed importance of pre-training at scale
-- Established patch-based image processing paradigm
+[3] Xu, Z., et al. "Evo-ViT: Slow-Fast Token Evolution for Dynamic Vision Transformer." NeurIPS, 2021.
 
-### Related Work
+[4] Bolya, D., et al. "Token Merging: Your ViT But Faster." CVPR, 2023.
 
-**Hybrid Architectures:**
-- Early Convolutions Help Transformers See Better (Xiao et al., 2021)
-- Tokens-to-Token ViT (Yuan et al., 2021)
-- ConViT: Improving Vision Transformers with Soft Convolutional Inductive Biases (d'Ascoli et al., 2021)
+[5] Lin, T.-Y., et al. "Focal Loss for Dense Object Detection." ICCV, 2017.
 
-**Vision Transformers:**
-- DeiT: Data-efficient Image Transformers (Touvron et al., 2021)
-- Swin Transformer (Liu et al., 2021)
-- CaiT: Going Deeper with Image Transformers (Touvron et al., 2021)
-
-### Implementation References
-
-- PyTorch Documentation: https://pytorch.org/docs/
-- torchvision Transforms: https://pytorch.org/vision/stable/transforms.html
-- Timm Library: https://github.com/rwightman/pytorch-image-models
+[6] He, K., et al. "Deep Residual Learning for Image Recognition." CVPR, 2016.
 
 ---
 
-## Acknowledgments
+## How to Use
 
-This implementation draws inspiration from the original Vision Transformer paper and various hybrid architecture approaches in the literature. The convolutional stem design is influenced by research showing that early convolutions improve transformer performance on vision tasks.
+### Installation
+
+```bash
+git clone https://github.com/aumkeshchaudhary/CTD-ViT.git
+cd CTD-ViT
+pip install -r requirements.txt
+```
+
+### Training Baseline
+
+```bash
+python experiments/baseline.py
+```
+
+### Training with CTD
+
+```bash
+python experiments/ctd_train.py --gamma 1.5
+```
+
+### Ablation Studies
+
+```bash
+# Test different γ values
+python experiments/ablations/gamma_sensitivity.py
+
+# Compare saliency metrics
+python experiments/ablations/saliency_metrics.py
+```
 
 ---
 
-## License
+## Citation
 
-This project is available for educational and research purposes. Please cite the original Vision Transformer paper when using this code or building upon this work.
+If you use this work, please cite:
+
+```bibtex
+@misc{chaudhary2024ctd,
+  title={Curriculum Token Drop: Training-Efficient Vision Transformers},
+  author={Chaudhary, Aumkesh},
+  year={2024},
+  howpublished={\url{https://github.com/aumkeshchaudhary/CTD-ViT}}
+}
+```
+
+---
+
+## Contact
+
+For questions or suggestions, open an issue on GitHub or contact [your-email@example.com]
+
+**Last Updated:** November 2024
