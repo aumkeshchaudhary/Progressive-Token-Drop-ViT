@@ -303,7 +303,7 @@ PTD-ViT/
 
 [3] Bolya, D., et al. "Token Merging: Your ViT But Faster." CVPR, 2023.
 
-[4] Anonymous. "PatchDrop: Efficient Transformers via Compressed Token Representations." ICLR, 2024.
+[4] Liu, Y., et al. PatchDropout: Economizing Vision Transformers Using Patch Dropout. In WACV, 2023.
 
 ---
 
