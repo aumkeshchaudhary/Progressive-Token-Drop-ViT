@@ -307,20 +307,3 @@ PTD-ViT/
 
 ---
 
-## Citation
-
-If you use this work, please cite:
-
-```bibtex
-@misc{chaudhary2025ptd,
-  title={Progressive Token Drop for Efficient Vision Transformers},
-  author={Chaudhary, Aumkesh},
-  institution={Indian Institute of Technology, Patna},
-  year={2025}
-}
-```
-
----
-
-**Author:** Aumkesh Chaudhary, Indian Institute of Technology, Patna  
-**Contact:** aumkeshchaudhary@gmail.com
